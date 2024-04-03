@@ -18,6 +18,9 @@ double SPEED_TARGET;
 double PID_Kp, PID_Ki, PID_Kd;
 double STANLEY_K;
 bool PARAMS_UPDATED;
+double SPEED_pre;
+double SPEED_TARGET_pre;
+bool flag;
 
 void dynamicParamCallback(const me5413_world::path_trackerConfig& config, uint32_t level)
 {
@@ -47,6 +50,8 @@ PathTrackerNode::PathTrackerNode() : tf2_listener_(tf2_buffer_)
   this->world_frame_ = "world";
 
   this->pid_ = control::PID(0.1, 1.0, -1.0, PID_Kp, PID_Ki, PID_Kd);
+  
+  flag = false;
 }
 
 void PathTrackerNode::localPathCallback(const nav_msgs::Path::ConstPtr& path)
@@ -66,12 +71,13 @@ void PathTrackerNode::robotOdomCallback(const nav_msgs::Odometry::ConstPtr& odom
 
   return;
 }
-
+ // 0.3 to 0.5 2.2 to 3
 double PathTrackerNode::computeStanelyControl(const double heading_error, const double cross_track_error, const double velocity)
 {
-  const double stanley_output = -1.0*(heading_error + std::atan2(STANLEY_K*cross_track_error, std::max(velocity, 0.3)));
+  const double heading_gain = 1.4; 
+  const double stanley_output = -1.0 * (heading_gain * heading_error + std::atan2(STANLEY_K * cross_track_error, std::max(velocity, 0.5)));
 
-  return std::min(std::max(stanley_output, -2.2), 2.2);
+  return std::min(std::max(stanley_output, -3.0), 3.0);
 }
 
 geometry_msgs::Twist PathTrackerNode::computeControlOutputs(const nav_msgs::Odometry& odom_robot, const geometry_msgs::Pose& pose_goal)
@@ -102,16 +108,26 @@ geometry_msgs::Twist PathTrackerNode::computeControlOutputs(const nav_msgs::Odom
   tf2::Vector3 robot_vel;
   tf2::fromMsg(this->odom_world_robot_.twist.twist.linear, robot_vel);
   const double velocity = robot_vel.length();
+  
+  if (!flag) { // If flag is false
+    SPEED_pre = velocity;
+    SPEED_TARGET_pre = SPEED_TARGET;
+    flag = true;
+  }
+
 
   geometry_msgs::Twist cmd_vel;
   if (PARAMS_UPDATED)
   {
     this->pid_.updateSettings(PID_Kp, PID_Ki, PID_Kd);
-    PARAMS_UPDATED = false;
+    PARAMS_UPDATED = true;
   }
-  cmd_vel.linear.x = this->pid_.calculate(SPEED_TARGET, velocity);
+  cmd_vel.linear.x = this->pid_.calculate(SPEED_TARGET+(SPEED_TARGET-SPEED_TARGET_pre)*0.1, velocity+(velocity-SPEED_pre)*0.1);
+  //cmd_vel.linear.x = this->pid_.calculate(SPEED_TARGET, velocity);
   cmd_vel.angular.z = computeStanelyControl(heading_error, lat_error, velocity);
-
+  
+  SPEED_TARGET_pre = SPEED_TARGET;
+  SPEED_pre = velocity;
   // std::cout << "robot velocity is " << velocity << " throttle is " << cmd_vel.linear.x << std::endl;
   // std::cout << "lateral error is " << lat_error << " heading_error is " << heading_error << " steering is " << cmd_vel.angular.z << std::endl;
 
